@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ジャパン・エア・パニック 3D</title>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;900&display=swap" rel="stylesheet">
+<style>
+:root{--navy:#1c2541;--red:#e4472b;--cream:#f4ecd8;color-scheme:dark}
+html,body{margin:0;height:100%;background:var(--navy);overflow:hidden;font-family:'Zen Maru Gothic','Hiragino Maru Gothic ProN',sans-serif}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}#c{pointer-events:none}
+</style></head><body><canvas id="gl"></canvas><canvas id="c"></canvas>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),LW=960,LH=600,PI=Math.PI;
+let VW,VH,DPR,S;function rs(){DPR=Math.min(devicePixelRatio||1,2);VW=innerWidth;VH=innerHeight;cv.width=VW*DPR;cv.height=VH*DPR;S=Math.min(VW/LW,VH/LH)}addEventListener('resize',rs);rs();
+const cl=(v,a,b)=>Math.max(a,Math.min(b,v)),dist=(a,b,c,d)=>Math.hypot(a-c,b-d),aD=(a,b)=>{let d=(b-a)%(2*PI);if(d>PI)d-=2*PI;if(d<-PI)d+=2*PI;return d};
+const LAND=[[[780,150],[830,130],[870,190],[860,260],[800,330],[765,420],[690,432],[640,460],[560,470],[470,480],[390,500],[330,510],[300,490],[330,470],[420,455],[520,440],[600,410],[660,370],[720,300],[740,220]],[[250,470],[300,510],[290,590],[240,620],[190,570],[200,500]],[[400,515],[480,505],[470,540],[390,550]],[[880,90],[950,60],[990,100],[940,140]],[[110,640],[190,632],[200,668],[130,680]]];
+const A={x:730,y:405,n:'羽田'},B={x:262,y:488,n:'福岡'},C={x:150,y:652,n:'沖縄'},DIST=dist(A.x,A.y,B.x,B.y);
+const fresh=()=>({ph:0,t:0,px:A.x,py:A.y,hd:Math.atan2(B.y-A.y,B.x-A.x),rl:0,wing:0,rp:0,ap:1,turb:0,m:[0,0,0,0,0,0,0,0],cr:0,bird:0,tr:[0,0,0,0,0,0,0,0],gn:[0,0,0,0,0,0,0,0],hj:0,tip:0,kc:0,st:{},lt:0,nx:25,ev:'',evt:0,fa:0,end:'',sc:0,sat:0});
+let W=fresh(),room=null,myPeer='~',lastPh=-1,toastT=0,toastS='',xp=0;
+try{xp=+localStorage.getItem('jap_xp')||0}catch(e){}
+const me={v:1,g:1,r:2,x:150,y:80,o:0,s:0,gr:0,a:0,tl:0,ap:0,sv:0,si:0,fq:0,tr:0,stun:0,hj:0,ej:0,ei:0,kk:0,kt:''};
+// Multiplayer: relay presence through the bundled WebSocket server.
+const roomId=(new URLSearchParams(location.search).get('room')||'flight').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,32)||'flight';
+const socketUrl=(location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws?room='+encodeURIComponent(roomId);
+let ws=null, reconnectDelay=1000, clientId='', joinSlot=0;
+const remotePeers=new Map();
+function makeRoom(){return {
+ peers(){const out=[]; for(const [peer,presence] of remotePeers){out.push({peer,presence,me:peer===clientId,isMe:peer===clientId,sameTab:peer===clientId,kind:'viewer'})} return out;},
+ presence(data){Object.assign(me,data); if(ws&&ws.readyState===WebSocket.OPEN){const out={};for(const k in me)out[k]=typeof me[k]==='number'?Math.round(me[k]*10)/10:me[k];ws.send(JSON.stringify({type:'presence',presence:out}));}return Promise.resolve();}
+}}
+room=makeRoom();
+function connectRoom(){try{ws=new WebSocket(socketUrl);ws.onopen=()=>{reconnectDelay=1000;const out={};for(const k in me)out[k]=me[k];ws.send(JSON.stringify({type:'presence',presence:out}));say('通信ルーム「'+roomId+'」に接続しました',2)};ws.onmessage=e=>{let msg;try{msg=JSON.parse(e.data)}catch{return}if(msg.type==='welcome'){clientId=msg.id;myPeer=clientId;joinSlot=msg.slot||0;if(!roleChosen){me.r=[1,2,3,2][Math.min(joinSlot,3)]||2;roleAutoSet=true;}}else if(msg.type==='snapshot'){remotePeers.clear();for(const x of msg.peers||[])remotePeers.set(x.id,x.presence||{});}else if(msg.type==='peer'){if(msg.action==='left')remotePeers.delete(msg.id);else remotePeers.set(msg.id,msg.presence||{});}else if(msg.type==='presence'){remotePeers.set(msg.id,msg.presence||{});}};ws.onclose=()=>{setTimeout(connectRoom,reconnectDelay);reconnectDelay=Math.min(10000,reconnectDelay*1.6)};ws.onerror=()=>{};}catch(e){setTimeout(connectRoom,reconnectDelay)}}
+connectRoom();
+let roleChosen=false,roleAutoSet=false;
+const keys={};addEventListener('keydown',e=>{if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault();if(e.repeat)return;keys[e.code]=1;press(e.code)});
+addEventListener('keyup',e=>keys[e.code]=0);addEventListener('blur',()=>{for(const k in keys)keys[k]=0});
+const K=(a,b)=>keys[a]||keys[b]?1:0,say=(s,t=3)=>{toastS=s;toastT=t};
+function crew(){const l=[];if(room)for(const p of room.peers())if(p.peer!==myPeer&&p.presence&&p.presence.v){l.push({peer:p.peer,p:p.presence,me:0,w:p.presence.w})}
+ l.push({peer:myPeer||'~local',p:me,me:1});l.sort((a,b)=>a.peer<b.peer?-1:a.peer>b.peer?1:0);return l}
+function mePeer(){if(clientId)myPeer=clientId}
+/* ---- input actions ---- */
+function press(c){
+ if(W.ph==0){if(c=='Digit1'){me.r=1;roleChosen=true}if(c=='Digit2'){me.r=2;roleChosen=true}if(c=='Digit3'){me.r=3;roleChosen=true};if(c=='Enter'&&isHost){W=fresh();W.ph=1;W.tr=W.tr.map(()=>Math.random()<.5?0:1+(Math.random()*4|0));W.tr[Math.random()*8|0]=3}return}
+ if(W.ph==2){if(c=='Enter'&&isHost)W=fresh();return}
+ if(me.stun>0)return;
+ if(c=='KeyE'){
+  if(me.s){me.s=0;me.x=700;me.y=80;return}
+  if(me.o)return;
+  if(me.x<95&&Math.abs(me.y-80)<60){me.tr=3;say('ワゴン補充：お茶×3',1.5);return}
+  if(me.x>730){me.s=1;me.x=770;me.y=80;say('操縦席：A/Dで旋回  Space：自動操縦',2.5);return}
+  if(me.x>380&&me.x<460&&me.y<45){if(W.wing==1){me.o=1;me.x=150;me.y=390;say('機外へ！Shiftで踏ん張り、亀裂でEを押して修理',3)}else say('非常口：今は出る理由がない',1.5);return}
+  if(me.tr>0){let b=-1,bd=52;for(let i=0;i<8;i++){const d=dist(me.x,me.y,px_(i),py_(i));if(d<bd){bd=d;b=i}}if(b>=0){me.tr--;me.sv++;me.si=b}else say('近くに乗客がいない',1)}else say('お茶が空：ワゴンで補充（左端）',1.5)}
+ if(c=='KeyX'&&!me.o){const hs=crew();let b=-1,bd=56;for(let i=0;i<8;i++)if(!W.gn[i]){const d=dist(me.x,me.y,px_(i),py_(i));if(d<bd){bd=d;b=i}}
+  if(b>=0){me.ej++;me.ei=b;say('つまみ出しの刑！',1.5)}else{const t=hs.find(h=>!h.me&&h.p.s&&dist(me.x,me.y,h.p.x,h.p.y)<60);if(t){me.kk++;me.kt=t.peer}else say('近くに追い出せる相手がいない',1.5)}}
+ if(c=='Space'&&me.s)me.ap=me.ap?0:1;
+ if(c=='KeyF'&&me.s){me.fq++;say('機内アナウンス！',1.5)}}
+const px_=i=>180+(i>>1)*130,py_=i=>(i&1)?125:35;
+/* ---- host simulation ---- */
+let isHost=true,lastSv={},lastFq={},lastEj={},lastKk={},pubT=0;
+function sim(dt){
+ const hs=crew(),seated=hs.find(h=>h.p.s);W.t+=dt;if(W.evt>0)W.evt-=dt;if(W.fa>0)W.fa-=dt;
+ const prog=1-dist(W.px,W.py,B.x,B.y)/DIST;
+ if(W.lt>0)W.lt-=dt;for(const k in W.st){W.st[k]-=dt;if(W.st[k]<=0)delete W.st[k]}
+ const hj0=W.hj;W.hj=hs.some(h=>h.p.hj)?1:0;if(W.hj&&!hj0){W.ev='操縦席から怪しい放送：「この便は沖縄行きに変更です」';W.evt=6}
+ W.nx-=dt;if(W.nx<=0){W.nx=18+Math.random()*10;randEv()}
+ if(W.turb>0)W.turb-=dt;else if(Math.random()<dt*.035){W.turb=6;W.ev='乱気流！座席にお戻りください';W.evt=4}
+ if(!W.wing&&W.t>22){W.wing=1;W.ev='左の翼がもげた！！ CAは非常口へ';W.evt=7;W.rl+=.3}
+ if(!W.bird&&prog>.62){W.bird=1;W.turb=5;W.ev='鳥が衝突…ガチョウだ！';W.evt=4;W.m=W.m.map(m=>Math.min(100,m+18))}
+ const auto=W.wing!=1&&(W.hj||(seated?seated.p.ap:1));W.ap=auto?1:0;
+ if(auto){const D=W.hj?C:B,want=aD(W.hd,Math.atan2(D.y-W.py,D.x-W.px));W.rl+=(cl(want*1.6,-.5,.5)-W.rl)*1.5*dt}
+ else{if(seated)W.rl+=seated.p.tl*1.3*dt;else if(hs.length==1)W.rl*=1-.45*dt}
+ if(W.wing==1)W.rl+=.22*dt;
+ W.rl=cl(W.rl,-1.8,1.8);W.hd+=W.rl*.55*dt;W.px+=Math.cos(W.hd)*4.2*dt;W.py+=Math.sin(W.hd)*4.2*dt;
+ if(Math.abs(W.rl)>1.35)W.cr+=dt;else W.cr=Math.max(0,W.cr-dt);
+ const k=.3+(W.wing==1?1.2:0)+Math.abs(W.rl)*1.4+(W.turb>0?1.6:0);W.m=W.m.map((m,i)=>W.gn[i]?0:Math.min(100,m+k*dt*[1,1.8,1.5,1.2,1.7][W.tr[i]]));
+ for(const h of hs){const id=h.peer;
+  if(h.p.sv!==(lastSv[id]??h.p.sv))serve(h.p.si);lastSv[id]=h.p.sv;
+  if(h.p.ej!==(lastEj[id]??h.p.ej))eject(h.p.ei);lastEj[id]=h.p.ej;
+  if(h.p.kk!==(lastKk[id]??h.p.kk)){W.st[h.p.kt]=4;W.ev='怪しい人物を席から引きずり下ろした！';W.evt=4}lastKk[id]=h.p.kk;
+  if(h.p.fq!==(lastFq[id]??h.p.fq)&&W.fa<=0){W.fa=20;W.m=W.m.map(m=>Math.max(0,m-15));W.ev='機長アナウンス：「揺れておりますが仕様です」';W.evt=4}lastFq[id]=h.p.fq;
+  if(h.p.o&&h.p.a&&W.wing==1){if(Math.abs(W.rl)<.5)W.rp+=dt/9;else W.ev='揺れすぎ！パイロット何してるの！';W.evt=Math.max(W.evt,.5)}}
+ if(W.rp>=1&&W.wing==1){W.wing=2;W.rp=1;W.ev='修理完了！自動操縦が復活';W.evt=5}
+ const avg=av();
+ if(W.cr>2.5)fin('crash','スピン墜落…機体はきりもみで九州の海へ',avg);
+ else if(W.hj&&dist(W.px,W.py,C.x,C.y)<22)fin('hj','ハイジャック成功！機体は沖縄の海辺に降りた',avg);else if(dist(W.px,W.py,B.x,B.y)<22){if(W.wing==1)fin('crash','片翼のまま着陸を試みた。滑走路が笑った',avg);else if(Math.abs(W.rl)>.9)fin('crash','傾きすぎて着陸。ターミナルにご挨拶',avg);else fin('ok','福岡に無事着陸！',avg)}
+}
+const av=()=>W.m.reduce((a,b,i)=>a+(W.gn[i]?100:b)*(W.tr[i]==3?3:1),0)/(8+2*W.tr.filter(t=>t==3).length);
+function serve(i){if(W.gn[i])return;const t=W.tr[i],b=W.m[i];W.m[i]=Math.max(0,b-(t==1?30:t==2?20:50)-(t==3?10:0));if(b<35)W.tip+=t==3?60:15}
+function eject(i){if(W.gn[i])return;W.gn[i]=1;W.kc++;W.m=W.m.map((m,j)=>j==i?m:Math.min(100,m+22));W.ev='乗客をパラシュート付きで窓から追放！周囲はドン引き';W.evt=5}
+function randEv(){const r=Math.random()*5|0,al=[0,1,2,3,4,5,6,7].filter(i=>!W.gn[i]),i=al[Math.random()*al.length|0];W.evt=5;
+ if(r==0){W.turb=7;W.lt=1.4;W.ev='雷雲に突っ込んだ！ピカッ！';W.m=W.m.map(m=>Math.min(100,m+8))}
+ else if(r==1){W.ev='酸素マスクが全員の顔面に落下！';W.m=W.m.map(m=>Math.min(100,m+16))}
+ else if(r==2&&al.length){W.tr[i]=1;W.m[i]=Math.min(100,W.m[i]+45);W.ev='酔客が大暴れ！お茶で黙らせろ！'}
+ else if(r==3&&al.length){W.tr[i]=2;W.m[i]=Math.min(100,W.m[i]+30);W.ev='赤ちゃんが大泣き！周囲も限界'}
+ else{const v=W.tr.indexOf(3);if(v>=0&&!W.gn[v]){W.m[v]=Math.min(100,W.m[v]+40);W.ev='VIPが「責任者を出せ」と激怒！'}else W.ev='機内食のカレーが全員にこぼれた'}}
+function fin(t,s,avg){W.ph=2;W.end=s;W.sat=Math.round(100-avg);W.sc=Math.max(0,t=='ok'?Math.round(W.sat*8+(W.wing==2?300:0)+200):t=='hj'?700:Math.round(W.sat*2))+W.tip-W.kc*40;W.ok=t=='ok'?1:t=='hj'?2:0}
+/* ---- local update ---- */
+function local(dt){
+ if(me.stun>0){me.stun-=dt;return}
+ me.tl=me.s?K('KeyD','ArrowRight')-K('KeyA','ArrowLeft'):0;me.gr=keys.ShiftLeft||keys.ShiftRight?1:0;me.hj=me.r==3&&me.s?1:0;
+ if(me.o){me.a=keys.KeyE&&dist(me.x,me.y,150,60)<36?1:0;
+  const g=(Math.sin(W.t*2.1)*55+Math.sin(W.t*.73+1)*45)*(.6+Math.abs(W.rl)*1.1+(W.turb>0?.8:0));
+  const dx=K('KeyD','ArrowRight')-K('KeyA','ArrowLeft'),dy=K('KeyS','ArrowDown')-K('KeyW','ArrowUp');
+  if(!me.gr){me.x+=dx*85*dt;me.y=cl(me.y+dy*85*dt,20,400)}me.x+=g*dt*(me.gr?.12:1);
+  const e=10+(420-me.y)*.12;if(me.x<e||me.x>300-e){me.o=0;me.x=420;me.y=60;me.stun=2.5;say('吹き飛ばされた！ハーネスで引き戻された',3)}
+  if(W.wing==2){me.o=0;me.x=420;me.y=60;say('おつかれ！機内に戻った',2)}}
+ else{me.a=0;if(!me.s){const dx=K('KeyD','ArrowRight')-K('KeyA','ArrowLeft'),dy=K('KeyS','ArrowDown')-K('KeyW','ArrowUp');me.x=cl(me.x+dx*140*dt,20,790);me.y=cl(me.y+dy*140*dt,22,138)}}}
+function sync(){if(!room)return;const o={};for(const k in me)o[k]=typeof me[k]=='number'?Math.round(me[k]*10)/10:me[k];room.presence(o).catch(()=>{})}
+function pub(){if(!room)return;room.presence({w:{ph:W.ph,t:+W.t.toFixed(1),px:+W.px.toFixed(1),py:+W.py.toFixed(1),hd:+W.hd.toFixed(3),rl:+W.rl.toFixed(3),wing:W.wing,rp:+W.rp.toFixed(2),ap:W.ap,tr:W.tr,gn:W.gn,hj:W.hj,tip:W.tip,kc:W.kc,st:W.st,lt:+W.lt.toFixed(1),turb:+W.turb.toFixed(1),m:W.m.map(Math.round),cr:+W.cr.toFixed(1),ev:W.ev,evt:+W.evt.toFixed(1),fa:+W.fa.toFixed(1),end:W.end,sc:W.sc,sat:W.sat,ok:W.ok||0}}).catch(()=>{})}
+/* ===== 3D ===== */
+const gl=new THREE.WebGLRenderer({canvas:document.getElementById('gl'),antialias:true}),scene=new THREE.Scene(),cam=new THREE.PerspectiveCamera(58,1,.1,3000);
+function rsg(){gl.setPixelRatio(Math.min(devicePixelRatio||1,2));gl.setSize(innerWidth,innerHeight,false);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()}addEventListener('resize',rsg);rsg();
+scene.add(new THREE.HemisphereLight(0xffffff,0x7a8aa8,.95));const sun=new THREE.DirectionalLight(0xfff0d0,.75);sun.position.set(60,120,40);scene.add(sun);
+const M=c=>new THREE.MeshLambertMaterial({color:c}),V=(x,y,z)=>new THREE.Vector3(x,y,z),SK=new THREE.Color(0xbfe0f0),FOG=new THREE.Fog(0xbfe0f0,120,1100);
+function bx(p,w,h,d,c,x,y,z){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),M(c));m.position.set(x,y,z);p.add(m);return m}
+function cyl(p,rt,rb,h,c,x,y,z,ax){const m=new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,12),M(c));m.position.set(x,y,z);if(ax=='x')m.rotation.z=PI/2;p.add(m);return m}
+function cone(p,r,h,c,x,y,z,rz){const m=new THREE.Mesh(new THREE.ConeGeometry(r,h,12),M(c));m.position.set(x,y,z);m.rotation.z=rz||0;p.add(m);return m}
+function spr(h){const c=document.createElement('canvas');c.width=256;c.height=64;const t=new THREE.CanvasTexture(c),s=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthTest:false}));s.scale.set(h*4,h,1);s.userData={c:c.getContext('2d'),t,k:''};return s}
+function setS(s,txt,col,emo){const u=s.userData;if(u.k==txt)return;u.k=txt;const x=u.c;x.clearRect(0,0,256,64);x.textAlign='center';if(emo){x.font='46px sans-serif';x.fillText(txt,128,50)}else{x.font='900 40px "Zen Maru Gothic",sans-serif';x.lineWidth=6;x.strokeStyle='#1c2541';x.strokeText(txt,128,46);x.fillStyle=col||'#fff';x.fillText(txt,128,46)}u.t.needsUpdate=true}
+function person(col,hat){const g=new THREE.Group();const b=cyl(g,.36,.42,1.1,col,0,.75,0);const h=new THREE.Mesh(new THREE.SphereGeometry(.34,12,10),M(0xf2c9a0));h.position.y=1.58;g.add(h);g.userData.head=h;if(hat)cyl(g,.32,.36,.2,hat,0,1.88,0);return g}
+const gW=new THREE.Group(),gC=new THREE.Group(),gX=new THREE.Group();scene.add(gW,gC,gX);
+/* world: Japan, extruded */
+const sea=new THREE.Mesh(new THREE.PlaneGeometry(5000,5000),M(0x4f8fb5));sea.rotation.x=-PI/2;gW.add(sea);
+for(const p of LAND){const sh=new THREE.Shape();p.forEach(([a,b],i)=>i?sh.lineTo(a,b):sh.moveTo(a,b));const m=new THREE.Mesh(new THREE.ExtrudeGeometry(sh,{depth:6,bevelEnabled:false}),[M(0x9fc27a),M(0xc9b98a)]);m.rotation.x=-PI/2;m.position.y=.1;gW.add(m)}
+cone(gW,15,20,0x6b7a8a,745,16,-380);cone(gW,6,7,0xffffff,745,23,-380);
+for(const [x,y,s] of[[820,200,1],[600,440,.8],[520,455,.9],[380,490,.7],[270,540,.8],[900,110,.9]])cone(gW,9*s,10*s,0x6e9a58,x,11,-y);
+function airport(a){const g=new THREE.Group();g.position.set(a.x,6.2,-a.y);gW.add(g);bx(g,22,.3,3.4,0x3a3a44,0,0,0);for(let i=-4;i<=4;i++)bx(g,1.6,.05,.4,0xffffff,i*2.4,.2,0);bx(g,4,3,4,0xeadfc3,-3,1.5,-7);bx(g,1.4,8,1.4,0xe4472b,5,4,-7);const l=spr(5);l.position.y=14;setS(l,a.n,'#fff');g.add(l)}
+airport(A);airport(B);airport(C);
+const ring=new THREE.Mesh(new THREE.TorusGeometry(12,.8,8,28),M(0xe4472b));ring.position.set(B.x,24,-B.y);ring.rotation.x=PI/2;gW.add(ring);
+const clouds=[];for(let i=0;i<18;i++){const g=new THREE.Group();for(let j=0;j<3;j++){const s=new THREE.Mesh(new THREE.SphereGeometry(6+j*2,10,8),new THREE.MeshLambertMaterial({color:0xffffff,transparent:true,opacity:.85}));s.position.set(j*8,j%2*2,j*2);g.add(s)}g.position.set(100+Math.random()*850,40+Math.random()*25,-(120+Math.random()*480));gW.add(g);clouds.push(g)}
+/* plane */
+const pl=new THREE.Group(),wLg=new THREE.Group();pl.rotation.order='YXZ';gW.add(pl);
+cyl(pl,1.1,1.1,10,0xf4ecd8,0,0,0,'x');cone(pl,1.1,2.6,0xf4ecd8,6.3,0,0,-PI/2);cone(pl,1.1,3,0xe4472b,-6.4,.2,0,PI/2);
+bx(pl,2.6,.18,9,0xe9e4d4,.3,-.4,4.5);bx(wLg,2.6,.18,9,0xe9e4d4,.3,-.4,-4.5);cyl(wLg,.5,.5,2,0x8a8a98,.8,-1,-3,'x');cyl(pl,.5,.5,2,0x8a8a98,.8,-1,3,'x');pl.add(wLg);
+bx(pl,1.8,2.6,.2,0xe4472b,-5.4,1.8,0);bx(pl,1.4,.15,4.4,0xe9e4d4,-5.4,.5,0);bx(pl,9,.3,.05,0xe4472b,0,.1,1.1);
+const smoke=[];for(let i=0;i<20;i++){const s=new THREE.Mesh(new THREE.SphereGeometry(.7,8,6),new THREE.MeshBasicMaterial({color:i%3?0x333333:0xff8a2a,transparent:true}));s.visible=false;s.userData.l=0;gW.add(s);smoke.push(s)}
+let dbs=null,sk=0;
+/* cabin (x*.05, y*.05) */
+bx(gC,42,.3,8,0xe9dfc6,20,-.15,4);bx(gC,42,.05,1.3,0xb5472e,20,.02,4);bx(gC,42,3.4,.3,0xcfc4a8,20,1.7,-.15);bx(gC,42,3.4,.3,0xcfc4a8,20,1.7,8.15);bx(gC,.3,3.4,8,0xb8b7a8,40.4,1.7,4);bx(gC,.3,3.4,8,0xb8b7a8,-.4,1.7,4);
+for(let i=0;i<12;i++){bx(gC,1.3,.9,.05,0x6fa8c9,3+i*3.2,2.2,.02);bx(gC,1.3,.9,.05,0x6fa8c9,3+i*3.2,2.2,7.98)}
+bx(gC,2.6,1.1,3,0xb0a07a,2.3,.55,4);bx(gC,1.4,.9,1.6,0x555566,38.4,.45,4);bx(gC,.3,1.6,1.6,0x555566,39,1.2,4);bx(gC,.15,1.1,3.4,0x38b6c9,40.2,1.7,4);
+const doorM=bx(gC,3,2.4,.2,0x8a8a78,21.25,1.2,.05);const dl=spr(.8);dl.position.set(21.25,3.6,.5);gC.add(dl);setS(dl,'非常口','#e4472b');
+const pas=[];
+for(let i=0;i<8;i++){const g=new THREE.Group();g.position.set(px_(i)*.05,0,py_(i)*.05);bx(g,2,.7,2.2,0x7d8fb8,0,.35,0);bx(g,.4,1.5,2.2,0x6b7ca6,-.9,1.2,0);const p=person(0x884466);p.position.y=.35;p.scale.y=.8;g.add(p);const f=spr(.9);f.position.y=2.9;g.add(f);gC.add(g);pas.push({p,f,g})}
+/* wing (X=(x-150)*.04, Z=(y-210)*.04) */
+{const sh=new THREE.Shape();sh.moveTo(-5.6,-8.4);sh.lineTo(5.6,-8.4);sh.lineTo(3.6,8.4);sh.lineTo(-3.6,8.4);const w=new THREE.Mesh(new THREE.ExtrudeGeometry(sh,{depth:.5,bevelEnabled:false}),[M(0xe2ddd0),M(0x9a9a8a)]);w.rotation.x=-PI/2;w.position.y=-.5;gX.add(w);
+ cyl(gX,1.1,1.1,2.6,0x8a8a98,-2,-1.6,2,'x');const fz=new THREE.Mesh(new THREE.CylinderGeometry(4,4,60,16),M(0xf4ecd8));fz.rotation.z=PI/2;fz.position.set(0,-1,13);gX.add(fz);bx(gX,60,.3,1,0xe4472b,0,2.6,9.2)}
+const crackM=bx(gX,3.6,.12,.9,0x1c2541,0,.05,-6),crackB=bx(gX,3.6,.14,.9,0xff8a2a,0,.1,-6),harn=new THREE.Line(new THREE.BufferGeometry().setFromPoints([V(0,0,0),V(0,0,1)]),new THREE.LineBasicMaterial({color:0xe4472b}));gX.add(harn);
+const streaks=[];for(let i=0;i<22;i++){const s=bx(gX,5,.05,.05,0xffffff,0,0,0);s.position.set(Math.random()*40-20,Math.random()*6-2,Math.random()*26-13);streaks.push(s)}
+const crewObj={};
+function getCrew(h,i){let o=crewObj[h.peer];if(!o){const col=[0xe4472b,0xf2c230,0x38b6c9,0x7cc44a][i%4];o={c:person(col,0x1c2541),w:person(col,0x1c2541),l1:spr(.8),l2:spr(.8)};o.c.add(o.l1);o.w.add(o.l2);o.l1.position.y=2.7;o.l2.position.y=2.7;gC.add(o.c);gX.add(o.w);crewObj[h.peer]=o}const n=h.me?'あなた':'乗員'+(i+1);setS(o.l1,n);setS(o.l2,n);return o}
+const face=m=>m<35?'🙂':m<70?'😐':m<100?'😠':'🤬';
+let lastWing=0,camT=V(0,0,0);const cups=[],svSeen={};
+function cup(f,i){const g=new THREE.Group();cyl(g,.22,.17,.34,0xffffff,0,0,0);cyl(g,.2,.2,.04,0x7a4a22,0,.15,0);const s=spr(.7);setS(s,'♨',0,1);s.position.y=.6;g.add(s);gC.add(g);cups.push({g,f:V(f.x,1.4,f.z),t:V(px_(i)*.05,1.5,py_(i)*.05),k:0})}
+function r3(hs,dt,tm){
+ const play=W.ph==1,mode=me.o?2:me.s?0:1;gW.visible=!play||mode==0;gC.visible=play&&mode==1;gX.visible=play&&mode==2;
+ scene.background=(W.lt>0&&Math.random()<.5)?new THREE.Color(0xffffff):SK;scene.fog=FOG;if(play&&mode==1){scene.background=new THREE.Color(0x2b3560);scene.fog=null}
+ pl.position.set(W.px,30,-W.py);pl.rotation.y=W.hd;pl.rotation.x=-W.rl*.55;wLg.visible=W.wing!=1;
+ if(W.wing==1&&lastWing!=1){const d=bx(gW,2.6,.18,9,0xe9e4d4,0,0,0);d.position.copy(pl.localToWorld(V(.3,-.4,-4.5)));dbs={m:d,v:V(-6,-4,-8),t:0}}lastWing=W.wing;
+ if(dbs){dbs.t+=dt;dbs.m.position.addScaledVector(dbs.v,dt);dbs.v.y-=14*dt;dbs.m.rotation.x+=dt*3;dbs.m.rotation.z+=dt*2;if(dbs.t>5){gW.remove(dbs.m);dbs=null}}
+ if(W.wing==1&&W.ph==1){const s=smoke[sk++%smoke.length];s.position.copy(pl.localToWorld(V(-1,0,-4+Math.random()*2)));s.userData.l=1.4;s.visible=true}
+ for(const s of smoke)if(s.userData.l>0){s.userData.l-=dt;s.position.y+=3*dt;s.position.x-=Math.cos(W.hd)*2*dt;const k=Math.max(.01,s.userData.l);s.scale.setScalar(k*1.4);s.material.opacity=k;if(s.userData.l<=0)s.visible=false}
+ for(const c of clouds){c.position.x+=3*dt;if(c.position.x>1000)c.position.x=60}
+ ring.rotation.z=tm;
+ const dir=V(Math.cos(W.hd),0,-Math.sin(W.hd)),sh=(W.turb>0?.35:.06)+Math.abs(W.rl)*.25;
+ if(!play){const a=tm*.25;cam.position.set(pl.position.x+Math.cos(a)*30,pl.position.y+8,pl.position.z+Math.sin(a)*30);cam.lookAt(pl.position)}
+ else if(mode==0){cam.position.copy(pl.position).addScaledVector(dir,-26).add(V((Math.random()-.5)*sh,9+(Math.random()-.5)*sh,(Math.random()-.5)*sh));cam.lookAt(pl.position.clone().addScaledVector(dir,10));cam.rotateZ(-W.rl*.3)}
+ for(let i=0;i<8;i++){const m=W.m[i],o=pas[i];o.p.userData.head.material.color.setHSL((120-m*1.2)/360,.6,.62);setS(o.f,['','🍺','👶','👑','💢'][W.tr[i]]+face(m),0,1);o.p.rotation.z=m>=100?Math.sin(tm*20+i)*.12:0;
+  if(W.gn[i]){o.t=(o.t||0)+dt;const t=o.t;o.p.visible=o.f.visible=t<1.5;o.p.position.set(0,.35+t*4-t*t*3,-t*7);o.p.rotation.x=t*9}else{o.t=0;o.p.visible=o.f.visible=true;o.p.position.set(0,.35,0);o.p.rotation.x=0}}
+ const seen={};hs.forEach((h,i)=>{const o=getCrew(h,i);seen[h.peer]=1;const p=h.p;if(p.sv!==(svSeen[h.peer]??p.sv))cup(o.c.position,p.si);svSeen[h.peer]=p.sv;o.c.visible=!p.o;o.w.visible=!!p.o;o.c.position.set(p.x*.05,p.s?-.3:0,p.y*.05);o.w.position.set((p.x-150)*.04,.0,(p.y-210)*.04)});
+ for(const k in crewObj)if(!seen[k]){crewObj[k].c.visible=crewObj[k].w.visible=false}
+ gC.rotation.x=W.rl*.07+Math.sin(tm*25)*.006*(W.turb>0?3:1);doorM.material.color.setHex(W.wing==1?(Math.sin(tm*8)>0?0xe4472b:0x7a2a1a):0x8a8a78);
+ if(play&&mode==1){camT.x+=(me.x*.05-camT.x)*Math.min(1,6*dt);camT.z+=(me.y*.05-camT.z)*Math.min(1,6*dt);cam.position.set(camT.x,14,camT.z+11+Math.sin(tm*25)*.03*(W.turb>0?3:1));cam.lookAt(camT.x,0,camT.z)}
+ if(play&&mode==2){const mx=(me.x-150)*.04,mz=(me.y-210)*.04;crackB.scale.x=Math.max(.02,1-W.rp);crackB.visible=W.wing==1;crackM.material.color.setHex(W.wing==2?0x7cc44a:0x1c2541);
+  harn.geometry.setFromPoints([V(0,.8,8.4),V(mx,.9,mz)]);for(const s of streaks){s.position.x-=70*dt;if(s.position.x<-22)s.position.x=22}
+  cam.position.set(mx*.5+(Math.random()-.5)*sh,8+(Math.random()-.5)*sh,mz+11);cam.lookAt(mx*.6,0,mz-3);cam.rotateZ(-W.rl*.2)}
+ for(let j=cups.length-1;j>=0;j--){const c=cups[j];c.k+=dt/.9;c.g.position.lerpVectors(c.f,c.t,Math.min(1,c.k));c.g.position.y+=Math.sin(Math.min(1,c.k)*PI)*1.2;if(c.k>=1){gC.remove(c.g);cups.splice(j,1)}}
+ gl.render(scene,cam)}
+/* ===== HUD overlay + loop ===== */
+const T=(s,x,y,sz=18,c='#f4ecd8',al='left',w=900)=>{ctx.font=w+' '+sz+'px "Zen Maru Gothic",sans-serif';ctx.textAlign=al;ctx.lineWidth=4;ctx.strokeStyle='rgba(28,37,65,.7)';ctx.strokeText(s,x,y);ctx.fillStyle=c;ctx.fillText(s,x,y)};
+const rr=(x,y,w,h,c)=>{ctx.fillStyle=c;ctx.fillRect(x,y,w,h)},circ=(x,y,r,c)=>{ctx.fillStyle=c;ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fill()};
+const rank=()=>xp<500?'研修生':xp<1500?'一人前CA':xp<3000?'ベテラン機長':'伝説の空飛ぶ会社',COLS=['#e4472b','#f2c230','#38b6c9','#7cc44a'];
+function hudBank(x,y){rr(x-90,y,180,12,'rgba(28,37,65,.8)');const v=cl(W.rl/1.8,-1,1);rr(x,y,v*88,12,Math.abs(W.rl)>.9?'#e4472b':'#7cc44a');rr(x-1,y-3,2,18,'#fff');T('機体の傾き',x,y-6,13,'#f4ecd8','center')}
+function lobby(hs){rr(0,0,LW,LH,'rgba(28,37,65,.55)');T('ジャパン・エア・パニック',LW/2,120,56,'#f4ecd8','center');T('羽田 → 福岡　翼はもげる。乗客は怒る。誰かが外に出る。',LW/2,160,20,'#ff8a6a','center');
+ hs.forEach((h,i)=>{const y=240+i*38;circ(300,y-6,11,COLS[i%4]);T((h.me?'あなた':'乗員'+(i+1))+(i==0?'（ホスト）':''),330,y,22);T(h.p.r==1?'✈ パイロット':'☕ CA',620,y,22,h.p.r==1?'#f2c230':'#38b6c9')});
+ T('1：パイロット　2：CA　3：ハイジャッカー（秘密）　あなた：'+['','パイロット','CA','ハイジャッカー'][me.r],LW/2,430,22,'#f4ecd8','center');T(isHost?'Enterで出発（1人でもテスト可：AI副操縦士つき）':'ホストの出発待ち…',LW/2,480,24,'#f2c230','center');
+ T('部屋：'+roomId+' ／ このページのURLを友達に送ると合流できます',LW/2,520,15,'#cfe6f5','center');T('累計ポイント '+xp+'　'+rank(),LW/2,560,16,'#f4ecd8','center')}
+function endScr(){rr(0,0,LW,LH,'rgba(28,37,65,.6)');T(W.ok==2?'ハイジャック成功！行き先は沖縄':W.ok?'フライト成功！':'墜落…でも笑い話になる',LW/2,170,52,W.ok?'#7cc44a':'#ff6a4a','center');T(W.end,LW/2,225,22,'#f4ecd8','center');T('乗客満足度 '+W.sat+'%',LW/2,310,34,'#f2c230','center');T('スコア '+W.sc+'　チップ'+W.tip+'　追放'+W.kc+'人',LW/2,360,26,'#f4ecd8','center');T(isHost?'Enterでロビーへ戻る':'ホストの操作待ち…',LW/2,460,22,'#cfe6f5','center')}
+function play(hs){
+ const avg=Math.round(100-av()),pr=cl(1-dist(W.px,W.py,B.x,B.y)/DIST,0,1);
+ rr(0,0,LW,44,'rgba(28,37,65,.82)');T('満足度 '+avg+'%',16,29,20,avg<40?'#ff6a4a':'#7cc44a');T('残り '+Math.round(dist(W.px,W.py,B.x,B.y)/4.2)+'秒',200,29,18);
+ T(W.wing==1?'⚠ 左翼破損':W.wing==2?'左翼：修理済':'左翼：正常',340,29,18,W.wing==1?'#ff6a4a':'#f4ecd8');T(W.ap?'自動操縦ON':'手動操縦',520,29,18,W.ap?'#7cc44a':'#f2c230');if(W.turb>0)T('乱気流',650,29,18,'#f2c230');
+ hudBank(LW-120,22);rr(16,52,200,6,'rgba(244,236,216,.3)');rr(16,52,200*pr,6,'#e4472b');T('羽田',16,76,12,'#f4ecd8');T('福岡',216,76,12,'#f4ecd8','right');
+ hs.forEach((h,i)=>{circ(24,100+i*24,7,COLS[i%4]);T((h.me?'あなた':'乗員'+(i+1))+'：'+(h.p.o?'機外！':h.p.s?'操縦席':'機内'),38,106+i*24,15,h.p.o?'#ff8a6a':'#f4ecd8')});
+ if(W.wing==1){rr(0,LH-30,LW,6,'rgba(28,37,65,.8)');rr(0,LH-30,LW*W.rp,6,'#7cc44a')}
+ if(W.evt>0&&W.ev){rr(LW/2-330,60,660,46,'rgba(228,71,43,.92)');T(W.ev,LW/2,91,22,'#fff','center')}
+ if(toastT>0)T(toastS,LW/2,LH-50,19,'#f4ecd8','center');
+ T(me.o?'WASD移動  Shift踏ん張り  亀裂でEホールド=修理':me.s?'A/D旋回  Space自動操縦ON/OFF  F機内アナウンス  E離席':'WASD移動  E:お茶/操縦席/非常口  X:乗客を窓から追放／席の怪しい人を引きずり下ろす',LW/2,LH-12,15,'#cfe6f5','center');
+ if(me.o&&W.wing==1)T('パイロットに傾きを抑えてもらおう（傾き小で修理が進む）',LW/2,LH-70,16,'#f2c230','center');if(me.stun>0)T('気絶中…',LW/2,LH/2,40,'#fff','center')}
+function frame(now){
+ mePeer();const hs=crew();isHost=hs[0].me;const dt=Math.min(.05,(now-(frame.l||now))/1000);frame.l=now;
+ if(!isHost){const h=hs.find(h=>h.w);if(h)W=Object.assign(W,h.w)}
+ if(W.st&&W.st[myPeer]>3.4){me.stun=3;me.s=0;me.o=0;me.hj=0;me.x=700;me.y=80}
+ if(W.ph!=lastPh){if(W.ph==1){me.o=0;me.s=me.r==1?1:0;me.x=me.s?770:150;me.y=80;me.tr=0;me.ap=0;me.stun=0;say(me.r==1?'パイロット：操縦席に着席。Spaceで自動操縦（サボり）':me.r==3?'あなたはハイジャッカー！操縦席に座ると沖縄行きに。CAに見つかるな':'CA：Eでワゴン補充→乗客へお茶。翼が見えたら…',4)}if(W.ph==0){me.s=0;me.o=0;lastWing=0;if(lastPh==2){try{xp+=W.sc||0;localStorage.setItem('jap_xp',xp)}catch(e){}}}lastPh=W.ph}
+ if(W.ph==1){local(dt);if(isHost)sim(dt)}
+ if(isHost&&now-pubT>(W.ph?60:200)){pub();pubT=now}
+ sync();if(toastT>0)toastT-=dt;
+ r3(hs,dt,now/1000);
+ ctx.setTransform(DPR,0,0,DPR,0,0);ctx.clearRect(0,0,VW,VH);ctx.setTransform(DPR*S,0,0,DPR*S,DPR*(VW-LW*S)/2,DPR*(VH-LH*S)/2);
+ if(W.ph==0)lobby(hs);else if(W.ph==2)endScr();else play(hs);
+ requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+</script></body></html>
